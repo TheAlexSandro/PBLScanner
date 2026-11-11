@@ -16,9 +16,11 @@ import { versionService } from "./src/services/version";
 import { homeIconService } from "./src/services/homeIcon";
 import { AppTheme } from "./src/theme";
 import { ObserveRoot } from "expo-observe";
+import { realtime } from "./src/services/realtime";
 
 if (Config.isValid) {
   connectivity.start();
+  realtime.start();
   scannerStatus.start();
   versionService.start();
   homeIconService.start();

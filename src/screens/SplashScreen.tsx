@@ -44,9 +44,9 @@ export default function SplashScreen({ navigation }: Props) {
 
       try {
         await Promise.all([
-          versionService.check(),
-          scannerStatus.check(),
-          homeIconService.load(),
+          await versionService.check(),
+          await scannerStatus.check(),
+          await homeIconService.load(),
         ]);
       } catch {}
       if (!alive.current) return;

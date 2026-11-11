@@ -2,7 +2,7 @@
   "expo": {
     "name": "PBL Ticket Scanner",
     "slug": "pblticketscanner",
-    "version": "1.0.6-12",
+    "version": "1.0.7",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0F1115",

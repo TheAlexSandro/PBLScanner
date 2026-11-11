@@ -1,12 +1,11 @@
-import { AppState, type AppStateStatus } from "react-native";
-
 import { Config } from "../config";
 import { Observable } from "../lib/observable";
 import { appVersion, fetchWithTimeout } from "../net";
 import { connectivity } from "./connectivity";
+import { realtime } from "./realtime";
 
-const BASE_INTERVAL_MS = 4_000;
-const MAX_INTERVAL_MS = 30_000;
+const FALLBACK_INTERVAL_MS = 15_000;
+const FALLBACK_MAX_MS = 120_000;
 const TIMEOUT_MS = 6_000;
 
 class ScannerStatusService {
@@ -16,52 +15,37 @@ class ScannerStatusService {
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private started = false;
-  private foreground = true;
   private failures = 0;
 
   private get delay(): number {
-    if (this.failures === 0) return BASE_INTERVAL_MS;
+    if (this.failures === 0) return FALLBACK_INTERVAL_MS;
     const exp = Math.min(Math.max(this.failures, 1), 4);
-    return Math.min(BASE_INTERVAL_MS * 2 ** exp, MAX_INTERVAL_MS);
+    return Math.min(FALLBACK_INTERVAL_MS * 2 ** exp, FALLBACK_MAX_MS);
   }
 
   start(): void {
     if (this.started) return;
     this.started = true;
-    AppState.addEventListener("change", this.onAppState);
-    connectivity.online.subscribe(this.onOnlineChanged);
-    void this.check();
-    this.schedule();
-  }
 
-  private schedule(): void {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = null;
-    if (!this.foreground) return;
-    this.timer = setTimeout(async () => {
-      await this.check();
-      this.schedule();
-    }, this.delay);
-  }
-
-  private onOnlineChanged = (): void => {
-    if (connectivity.online.value) {
+    realtime.onScannerStatus((active) => {
       this.failures = 0;
-      void this.check();
-    }
-  };
+      this.apply(active);
+    });
 
-  private onAppState = (state: AppStateStatus): void => {
-    if (state === "active") {
-      this.foreground = true;
-      void this.check();
-      this.schedule();
-    } else if (state === "background") {
-      this.foreground = false;
-      if (this.timer) clearTimeout(this.timer);
-      this.timer = null;
+    realtime.connected.subscribe(() => {
+      if (realtime.connected.value) this.stopFallback();
+      else this.startFallback();
+    });
+    if (!realtime.connected.value) this.startFallback();
+  }
+
+  private apply(active: boolean): void {
+    if (!this.known.value) this.known.value = true;
+    if (active !== this.active.value) {
+      console.log(`[ScannerStatus] active: ${this.active.value} -> ${active}`);
+      this.active.value = active;
     }
-  };
+  }
 
   check = async (): Promise<void> => {
     if (this.checking.value) return;
@@ -70,17 +54,10 @@ class ScannerStatusService {
     this.checking.value = true;
     try {
       const result = await this.fetchStatus();
-      if (result === null) {
-        this.failures++;
-      } else {
+      if (result === null) this.failures++;
+      else {
         this.failures = 0;
-        if (!this.known.value) this.known.value = true;
-        if (result !== this.active.value) {
-          console.log(
-            `[ScannerStatus] active: ${this.active.value} -> ${result}`,
-          );
-          this.active.value = result;
-        }
+        this.apply(result);
       }
     } finally {
       this.checking.value = false;
@@ -101,19 +78,28 @@ class ScannerStatusService {
         },
         TIMEOUT_MS,
       );
-
-      if (res.status !== 200) {
-        console.warn("[ScannerStatus]", res.status);
-        return null;
-      }
+      if (res.status !== 200) return null;
       connectivity.reportSuccess();
       const data = await res.json();
       return data?.result?.isScannerReady === true;
-    } catch (e) {
-      console.warn("[ScannerStatus] error:", e);
+    } catch {
       connectivity.reportFailure();
       return null;
     }
+  }
+
+  private startFallback(): void {
+    if (this.timer) return;
+    const tick = async (): Promise<void> => {
+      await this.check();
+      this.timer = setTimeout(tick, this.delay);
+    };
+    void tick();
+  }
+
+  private stopFallback(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
   }
 }
 
