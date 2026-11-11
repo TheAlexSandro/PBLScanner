@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "PBL Ticket Scanner",
+    "slug": "pblticketscanner",
+    "version": "1.0.6-12",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0F1115",
+    "icon": "./assets/icon.png",
+    "android": {
+      "package": "id.sch.smkn1blitar.pblticketscanner",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png"
+      }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Aplikasi membutuhkan kamera untuk memindai kode QR tiket.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "buildArchs": [
+              "arm64-v8a"
+            ],
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
+        }
+      ],
+      "expo-font",
+      "expo-build-properties"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "45ecbacc-526c-49f2-a3bc-113a6d3c51eb"
+      }
+    }
+  }
+}
