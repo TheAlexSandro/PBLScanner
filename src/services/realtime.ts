@@ -54,6 +54,7 @@ class RealtimeService {
       reconnection: true,
       reconnectionDelay: 2_000,
       reconnectionDelayMax: 15_000,
+      secure: true,
     });
     this.socket = socket;
 
