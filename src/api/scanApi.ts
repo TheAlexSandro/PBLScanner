@@ -10,6 +10,7 @@ export type ScanResult = {
   name?: string;
   kelas?: string;
   scannedAt?: Date;
+  final?: boolean;
 };
 
 const errorResult = (message: string): ScanResult => ({
@@ -77,6 +78,7 @@ export async function scanTicket(code: string): Promise<ScanResult> {
       message: messageOf(data) ?? "",
       name: ticket?.name != null ? String(ticket.name) : undefined,
       kelas: ticket?.kelas != null ? String(ticket.kelas) : undefined,
+      final: result?.final,
       scannedAt,
     };
   } catch (e) {

@@ -85,6 +85,25 @@ export function ResultSheet({ result, onClose }: Props) {
                 <Text style={styles.time}>Di-scan pada {fmt(r.scannedAt)}</Text>
               ) : null}
 
+              {r.final === false ? (
+                <View style={styles.info}>
+                  <View style={styles.infoIconWrap}>
+                    <MaterialIcons
+                      name="info-outline"
+                      size={22}
+                      color={AppTheme.warning}
+                    />
+                  </View>
+                  <View style={styles.infoBody}>
+                    <Text style={styles.infoTitle}>Tiket belum difinalkan</Text>
+                    <Text style={styles.infoText}>
+                      Scan ini hanya pratinjau dan tidak tersimpan. Finalkan
+                      tiket lewat dashboard sebelum acara dimulai.
+                    </Text>
+                  </View>
+                </View>
+              ) : null}
+
               <View style={{ height: 24 }} />
               <FilledButton label="Scan lagi" onPress={onClose} />
             </ScrollView>
@@ -151,5 +170,37 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 8,
     textAlign: "center",
+  },
+  info: {
+    alignSelf: "stretch",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 24,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: hexA(AppTheme.warning, 36),
+    borderWidth: 1,
+    borderColor: AppTheme.warning,
+  },
+  infoIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    marginRight: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: hexA(AppTheme.warning, 36),
+  },
+  infoBody: { flex: 1 },
+  infoTitle: {
+    color: AppTheme.warning,
+    fontSize: 14,
+    fontWeight: "bold",
+    marginBottom: 2,
+  },
+  infoText: {
+    color: AppTheme.text,
+    fontSize: 13,
+    lineHeight: 18,
   },
 });
