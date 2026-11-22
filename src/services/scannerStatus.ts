@@ -42,7 +42,6 @@ class ScannerStatusService {
   private apply(active: boolean): void {
     if (!this.known.value) this.known.value = true;
     if (active !== this.active.value) {
-      console.log(`[ScannerStatus] active: ${this.active.value} -> ${active}`);
       this.active.value = active;
     }
   }

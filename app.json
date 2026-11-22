@@ -40,7 +40,8 @@
       ],
       "expo-font",
       "expo-build-properties",
-      "expo-status-bar"
+      "expo-status-bar",
+      "@config-plugins/react-native-webrtc"
     ],
     "extra": {
       "eas": {

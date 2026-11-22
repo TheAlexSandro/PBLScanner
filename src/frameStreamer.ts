@@ -1,0 +1,112 @@
+import { useEffect, useRef, useState } from "react";
+import { io, Socket } from "socket.io-client";
+import { Config } from "./config";
+import { appVersion } from "./net";
+
+type Options = {
+  label?: string;
+  enabled: boolean;
+  capture: () => Promise<ArrayBuffer | null>;
+  intervalMs?: number;
+};
+
+const makeId = () =>
+  `s${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+
+export function frameStreamer({
+  label = "Scanner",
+  enabled,
+  capture,
+  intervalMs = 30,
+}: Options) {
+  const [deviceId] = useState(makeId);
+  const [viewers, setViewers] = useState(0);
+  const [status, setStatus] = useState<
+    "idle" | "connecting" | "online" | "error"
+  >("idle");
+  const socketRef = useRef<Socket | null>(null);
+  const captureRef = useRef(capture);
+  captureRef.current = capture;
+
+  useEffect(() => {
+    if (!enabled) return;
+    const ids = new Set<string>();
+    setStatus("connecting");
+
+    const socket = io(`${Config.baseUrl}/stream`, {
+      transports: ["websocket"],
+      auth: (cb) => {
+        fetch(`${Config.baseUrl}/stream/scannerToken`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-App-Version": appVersion(),
+            "X-Scanner-Key": Config.scannerKey,
+          },
+          body: JSON.stringify({ deviceId }),
+        })
+          .then((r) => {
+            if (!r.ok) throw new Error(String(r.status));
+            return r.json();
+          })
+          .then((r) => cb({ token: r["result"]["token"], label }))
+          .catch(() => cb({}));
+      },
+    });
+    socketRef.current = socket;
+
+    socket.on("connect", () => setStatus("online"));
+    socket.on("connect_error", () => setStatus("error"));
+    socket.on("viewer-joined", ({ viewerId }) => {
+      console.log("[stream] viewer-joined", viewerId);
+      ids.add(viewerId);
+      setViewers(ids.size);
+    });
+    socket.on("connect_error", (e) => {
+      console.log("[stream] connect_error", e.message);
+      setStatus("error");
+    });
+
+    socket.on("viewer-left", ({ viewerId }) => {
+      ids.delete(viewerId);
+      setViewers(ids.size);
+    });
+    socket.on("disconnect", () => {
+      ids.clear();
+      setViewers(0);
+    });
+
+    return () => {
+      socket.disconnect();
+      socketRef.current = null;
+      setViewers(0);
+      setStatus("idle");
+    };
+  }, [Config.baseUrl, Config.scannerKey, deviceId, label, enabled]);
+
+  useEffect(() => {
+    if (!enabled || viewers === 0) return;
+    let stop = false;
+    (async () => {
+      while (!stop) {
+        const started = Date.now();
+        let failed = false;
+        try {
+          const frame = await captureRef.current();
+          if (frame && socketRef.current?.connected)
+            socketRef.current.volatile.emit("frame", new Uint8Array(frame));
+        } catch (e) {
+          console.log("[stream] capture error", e);
+          failed = true;
+        }
+        const wait = (failed ? 500 : intervalMs) - (Date.now() - started);
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [enabled, viewers, intervalMs]);
+
+  return { deviceId, viewers, status };
+}

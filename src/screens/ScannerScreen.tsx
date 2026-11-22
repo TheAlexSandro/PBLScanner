@@ -3,10 +3,16 @@ import Slider from "@react-native-community/slider";
 import { useIsFocused } from "@react-navigation/native";
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import {
-  CameraView,
-  useCameraPermissions,
-  type BarcodeScanningResult,
-} from "expo-camera";
+  Camera,
+  useCameraDevice,
+  useCameraPermission,
+  type CameraRef,
+} from "react-native-vision-camera";
+import {
+  useBarcodeScannerOutput,
+  type Barcode,
+  type TargetBarcodeFormat,
+} from "react-native-vision-camera-barcode-scanner";
 import * as Haptics from "expo-haptics";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
@@ -32,10 +38,15 @@ import type { RootStackParamList } from "../navigation";
 import { isGateOpen, useGate } from "../services/gateState";
 import { scannerStatus } from "../services/scannerStatus";
 import { AppTheme } from "../theme";
+import { frameStreamer } from "../frameStreamer";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Scanner">;
 
 const DUPLICATE_WINDOW_MS = 1500;
+const BARCODE_FORMATS: TargetBarcodeFormat[] = ["qr-code"];
+const MAX_ZOOM = 8;
+const STREAM_WIDTH = 480;
+const STREAM_QUALITY = 50;
 
 function feedback(s: ScanStatus) {
   switch (s) {
@@ -79,7 +90,9 @@ export default function ScannerScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
   const focused = useIsFocused();
   const { open } = useGate();
-  const [permission, requestPermission] = useCameraPermissions();
+  const { hasPermission, canRequestPermission, requestPermission } =
+    useCameraPermission();
+  const device = useCameraDevice("back");
 
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [torch, setTorch] = useState(false);
@@ -87,24 +100,65 @@ export default function ScannerScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ScanResult | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
 
   const busy = useRef(false);
   const lastCode = useRef<string | null>(null);
   const lastScan = useRef(0);
   const mounted = useRef(true);
+  const cameraRef = useRef<CameraRef>(null);
+  const [cameraReady, setCameraReady] = useState(false);
+
+  type Snap = Awaited<ReturnType<CameraRef["takeSnapshot"]>>;
+  const nextSnap = useRef<Promise<Snap> | null>(null);
+
+  const capture = useCallback(async () => {
+    const cam = cameraRef.current;
+    if (busy.current || !cam) return null;
+    const pending = nextSnap.current ?? cam.takeSnapshot();
+    nextSnap.current = null;
+    const snap = await pending;
+    const upcoming = cam.takeSnapshot();
+    upcoming.catch(() => {
+      if (nextSnap.current === upcoming) nextSnap.current = null;
+    });
+    nextSnap.current = upcoming;
+
+    try {
+      const w = Math.min(STREAM_WIDTH, snap.width);
+      const h = Math.round((snap.height * w) / snap.width);
+      const small = w < snap.width ? await snap.resizeAsync(w, h) : snap;
+      try {
+        const enc = await small.toEncodedImageDataAsync("jpg", STREAM_QUALITY);
+        return enc.buffer;
+      } finally {
+        if (small !== snap) small.dispose();
+      }
+    } finally {
+      snap.dispose();
+    }
+  }, []);
+
+  frameStreamer({
+    enabled: acknowledged && cameraReady && !cameraError,
+    capture,
+    intervalMs: 100,
+  });
 
   useEffect(() => {
     mounted.current = true;
     void scannerStatus.check();
     return () => {
       mounted.current = false;
+      nextSnap.current?.then((s) => s.dispose()).catch(() => {});
+      nextSnap.current = null;
     };
   }, []);
 
-  const onScanned = useCallback(async (e: BarcodeScanningResult) => {
+  const onScanned = useCallback(async (raw: string) => {
     if (busy.current || !isGateOpen()) return;
 
-    const code = e.data?.trim();
+    const code = raw.trim();
     if (!code) return;
 
     const now = Date.now();
@@ -135,9 +189,24 @@ export default function ScannerScreen({ navigation }: Props) {
     busy.current = false;
   }, []);
 
+  const scannerOutput = useBarcodeScannerOutput({
+    barcodeFormats: BARCODE_FORMATS,
+    onBarcodeScanned: (barcodes: Barcode[]) => {
+      const value = barcodes.find((b) => b.rawValue)?.rawValue;
+      if (value) void onScanned(value);
+    },
+    onError: (e: Error) => console.warn("[scanner]", e.message),
+  });
+
   if (!open) return <GateClosed onBack={() => navigation.goBack()} />;
-  if (!permission) return <View style={styles.root} />;
-  if (!permission.granted) {
+  if (!acknowledged)
+    return (
+      <StreamNotice
+        onAccept={() => setAcknowledged(true)}
+        onBack={() => navigation.goBack()}
+      />
+    );
+  if (!hasPermission) {
     return (
       <StatusView
         icon="videocam-off"
@@ -145,11 +214,11 @@ export default function ScannerScreen({ navigation }: Props) {
         title="Izin Kamera Diperlukan"
         message="Aplikasi membutuhkan kamera untuk memindai kode QR pada tiket."
         actionLabel={
-          permission.canAskAgain ? "Izinkan kamera" : "Buka pengaturan"
+          canRequestPermission ? "Izinkan kamera" : "Buka pengaturan"
         }
         actionIcon="photo-camera"
         onAction={() =>
-          permission.canAskAgain
+          canRequestPermission
             ? void requestPermission()
             : void Linking.openSettings()
         }
@@ -175,16 +244,25 @@ export default function ScannerScreen({ navigation }: Props) {
         })
       }
     >
-      <View style={[StyleSheet.absoluteFill]}>
-        {focused && !cameraError ? (
-          <CameraView
+      <View style={StyleSheet.absoluteFill}>
+        {!cameraError && device ? (
+          <Camera
+            ref={cameraRef}
             style={StyleSheet.absoluteFill}
-            facing="back"
-            zoom={zoom}
-            enableTorch={torch}
-            barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-            onBarcodeScanned={onScanned}
-            onMountError={(e) => setCameraError(e.message)}
+            device={device}
+            isActive={focused}
+            outputs={[scannerOutput]}
+            torchMode={cameraReady ? (torch ? "on" : "off") : undefined}
+            zoom={
+              cameraReady
+                ? device.minZoom +
+                  zoom * (Math.min(device.maxZoom, MAX_ZOOM) - device.minZoom)
+                : undefined
+            }
+            resizeMode="cover"
+            onPreviewStarted={() => setCameraReady(true)}
+            onPreviewStopped={() => setCameraReady(false)}
+            onError={(e) => setCameraError(e.message)}
           />
         ) : null}
       </View>
@@ -197,12 +275,12 @@ export default function ScannerScreen({ navigation }: Props) {
             color="rgba(255,255,255,0.7)"
           />
           <Text style={styles.cameraErrorText}>
-            {"Kamera tidak dapat dibuka\n"}({cameraError})
+            {"Kamera tidak dapat dibuka\n"}({cameraError.substring(0, 700)})
           </Text>
         </View>
       ) : null}
 
-      {ready ? (
+      {ready && !cameraError ? (
         <View style={StyleSheet.absoluteFill} pointerEvents="none">
           <ScanOverlay
             width={size.w}
@@ -259,6 +337,33 @@ export default function ScannerScreen({ navigation }: Props) {
       ) : null}
 
       <ResultSheet result={result} onClose={dismiss} />
+    </View>
+  );
+}
+
+function StreamNotice({
+  onAccept,
+  onBack,
+}: {
+  onAccept: () => void;
+  onBack: () => void;
+}) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={{ flex: 1, backgroundColor: AppTheme.bg }}>
+      <StatusView
+        icon="photo-camera-front"
+        color={AppTheme.warning}
+        title="Kamera Akan Dipantau"
+        message="Selama layar scanner terbuka, tampilan kamera perangkat ini akan disiarkan langsung (streaming) ke dashboard web untuk keperluan pemantauan."
+        actionLabel="Mengerti, Mulai Scan"
+        actionIcon="check"
+        onAction={onAccept}
+      />
+      <View style={{ position: "absolute", top: insets.top + 4, left: 8 }}>
+        <IconButton icon="arrow-back" color={AppTheme.text} onPress={onBack} />
+      </View>
     </View>
   );
 }
