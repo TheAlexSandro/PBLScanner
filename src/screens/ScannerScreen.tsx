@@ -307,8 +307,7 @@ export default function ScannerScreen({ navigation }: Props) {
             color="rgba(255,255,255,0.7)"
           />
           <Text style={styles.cameraErrorText}>
-            {"Kamera tidak dapat dibuka\n"}({cameraError.substring(0, 700)}{" "}
-            {void console.log(cameraError)})
+            {"Kamera tidak dapat dibuka\n"}({cameraError.substring(0, 700)})
           </Text>
         </View>
       ) : null}
