@@ -9,14 +9,14 @@ import {
   type CameraRef,
 } from "react-native-vision-camera";
 import {
-  useBarcodeScannerOutput,
+  useBarcodeScanner,
   type Barcode,
   type TargetBarcodeFormat,
 } from "react-native-vision-camera-barcode-scanner";
 import * as Haptics from "expo-haptics";
 import { useKeepAwake } from "expo-keep-awake";
 import { LinearGradient } from "expo-linear-gradient";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import {
   ActivityIndicator,
   Linking,
@@ -27,6 +27,11 @@ import {
   type LayoutChangeEvent,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useFrameOutput, CommonResolutions } from "react-native-vision-camera";
+import { createSynchronizable, scheduleOnRN } from "react-native-worklets";
+import type { Image } from "react-native-nitro-image";
+import { NitroModules } from "react-native-nitro-modules";
+import type { FrameConverter } from "react-native-vision-camera";
 
 import { scanTicket, type ScanResult, type ScanStatus } from "../api/scanApi";
 import { ResultSheet } from "../components/ResultSheet";
@@ -45,8 +50,8 @@ type Props = NativeStackScreenProps<RootStackParamList, "Scanner">;
 const DUPLICATE_WINDOW_MS = 1500;
 const BARCODE_FORMATS: TargetBarcodeFormat[] = ["qr-code"];
 const MAX_ZOOM = 8;
-const STREAM_WIDTH = 480;
-const STREAM_QUALITY = 50;
+const STREAM_WIDTH = 320;
+const STREAM_QUALITY = 40;
 
 function feedback(s: ScanStatus) {
   switch (s) {
@@ -109,51 +114,14 @@ export default function ScannerScreen({ navigation }: Props) {
   const cameraRef = useRef<CameraRef>(null);
   const [cameraReady, setCameraReady] = useState(false);
 
-  type Snap = Awaited<ReturnType<CameraRef["takeSnapshot"]>>;
-  const nextSnap = useRef<Promise<Snap> | null>(null);
+  const latestJpeg = useRef<ArrayBuffer | null>(null);
+  const encoding = useRef(false);
 
-  const capture = useCallback(async () => {
-    const cam = cameraRef.current;
-    if (busy.current || !cam) return null;
-    const pending = nextSnap.current ?? cam.takeSnapshot();
-    nextSnap.current = null;
-    const snap = await pending;
-    const upcoming = cam.takeSnapshot();
-    upcoming.catch(() => {
-      if (nextSnap.current === upcoming) nextSnap.current = null;
-    });
-    nextSnap.current = upcoming;
-
-    try {
-      const w = Math.min(STREAM_WIDTH, snap.width);
-      const h = Math.round((snap.height * w) / snap.width);
-      const small = w < snap.width ? await snap.resizeAsync(w, h) : snap;
-      try {
-        const enc = await small.toEncodedImageDataAsync("jpg", STREAM_QUALITY);
-        return enc.buffer;
-      } finally {
-        if (small !== snap) small.dispose();
-      }
-    } finally {
-      snap.dispose();
-    }
-  }, []);
-
-  frameStreamer({
-    enabled: acknowledged && cameraReady && !cameraError,
-    capture,
-    intervalMs: 100,
-  });
-
-  useEffect(() => {
-    mounted.current = true;
-    void scannerStatus.check();
-    return () => {
-      mounted.current = false;
-      nextSnap.current?.then((s) => s.dispose()).catch(() => {});
-      nextSnap.current = null;
-    };
-  }, []);
+  const converter = useMemo(
+    () => NitroModules.createHybridObject<FrameConverter>("FrameConverter"),
+    [],
+  );
+  const barcodeScanner = useBarcodeScanner({ barcodeFormats: BARCODE_FORMATS });
 
   const onScanned = useCallback(async (raw: string) => {
     if (busy.current || !isGateOpen()) return;
@@ -189,14 +157,77 @@ export default function ScannerScreen({ navigation }: Props) {
     busy.current = false;
   }, []);
 
-  const scannerOutput = useBarcodeScannerOutput({
-    barcodeFormats: BARCODE_FORMATS,
-    onBarcodeScanned: (barcodes: Barcode[]) => {
-      const value = barcodes.find((b) => b.rawValue)?.rawValue;
-      if (value) void onScanned(value);
+  const handleImage = useCallback(async (image: Image) => {
+    if (encoding.current) {
+      image.dispose();
+      return;
+    }
+    encoding.current = true;
+    try {
+      const w = Math.min(STREAM_WIDTH, image.width);
+      const h = Math.round((image.height * w) / image.width);
+      const small = w < image.width ? await image.resizeAsync(w, h) : image;
+      try {
+        const enc = await small.toEncodedImageDataAsync("jpg", STREAM_QUALITY);
+        latestJpeg.current = enc.buffer;
+      } finally {
+        if (small !== image) small.dispose();
+      }
+    } catch (e) {
+      console.log("[enc] error", e);
+    } finally {
+      encoding.current = false;
+      image.dispose();
+    }
+  }, []);
+
+  const frameOutput = useFrameOutput({
+    pixelFormat: "yuv",
+    targetResolution: CommonResolutions.HD_16_9,
+    enablePhysicalBufferRotation: true,
+    onFrame(frame) {
+      "worklet";
+      try {
+        const g = globalThis as any;
+        const now = Date.now();
+
+        if (now - (g.__scanTs ?? 0) >= 150) {
+          g.__scanTs = now;
+          const barcodes = barcodeScanner.scanCodes(frame);
+          const value = barcodes.find((b: Barcode) => b.rawValue)?.rawValue;
+          if (value) scheduleOnRN(onScanned, value);
+        }
+
+        if (now - (g.__streamTs ?? 0) < 66) return;
+        g.__streamTs = now;
+        const image = converter.convertFrameToImage(frame);
+        scheduleOnRN(handleImage, image);
+      } catch (e) {
+        console.log("[frame] error", String(e));
+      } finally {
+        frame.dispose();
+      }
     },
-    onError: (e: Error) => console.warn("[scanner]", e.message),
   });
+
+  const capture = useCallback(async () => {
+    const buf = latestJpeg.current;
+    latestJpeg.current = null;
+    return buf;
+  }, []);
+
+  frameStreamer({
+    enabled: acknowledged && cameraReady && !cameraError,
+    capture,
+  });
+
+  useEffect(() => {
+    mounted.current = true;
+    void scannerStatus.check();
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   if (!open) return <GateClosed onBack={() => navigation.goBack()} />;
   if (!acknowledged)
@@ -248,10 +279,11 @@ export default function ScannerScreen({ navigation }: Props) {
         {!cameraError && device ? (
           <Camera
             ref={cameraRef}
+            constraints={[{ fps: 30 }]}
+            outputs={[frameOutput]}
             style={StyleSheet.absoluteFill}
             device={device}
             isActive={focused}
-            outputs={[scannerOutput]}
             torchMode={cameraReady ? (torch ? "on" : "off") : undefined}
             zoom={
               cameraReady
@@ -275,7 +307,8 @@ export default function ScannerScreen({ navigation }: Props) {
             color="rgba(255,255,255,0.7)"
           />
           <Text style={styles.cameraErrorText}>
-            {"Kamera tidak dapat dibuka\n"}({cameraError.substring(0, 700)})
+            {"Kamera tidak dapat dibuka\n"}({cameraError.substring(0, 700)}{" "}
+            {void console.log(cameraError)})
           </Text>
         </View>
       ) : null}

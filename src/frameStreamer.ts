@@ -17,7 +17,7 @@ export function frameStreamer({
   label = "Scanner",
   enabled,
   capture,
-  intervalMs = 30,
+  intervalMs = 66,
 }: Options) {
   const [deviceId] = useState(makeId);
   const [viewers, setViewers] = useState(0);
@@ -27,6 +27,8 @@ export function frameStreamer({
   const socketRef = useRef<Socket | null>(null);
   const captureRef = useRef(capture);
   captureRef.current = capture;
+
+  const hasViewers = viewers > 0;
 
   useEffect(() => {
     if (!enabled) return;
@@ -56,17 +58,13 @@ export function frameStreamer({
     socketRef.current = socket;
 
     socket.on("connect", () => setStatus("online"));
-    socket.on("connect_error", () => setStatus("error"));
+    socket.on("connect_error", (e) => {
+      setStatus("error");
+    });
     socket.on("viewer-joined", ({ viewerId }) => {
-      console.log("[stream] viewer-joined", viewerId);
       ids.add(viewerId);
       setViewers(ids.size);
     });
-    socket.on("connect_error", (e) => {
-      console.log("[stream] connect_error", e.message);
-      setStatus("error");
-    });
-
     socket.on("viewer-left", ({ viewerId }) => {
       ids.delete(viewerId);
       setViewers(ids.size);
@@ -82,31 +80,49 @@ export function frameStreamer({
       setViewers(0);
       setStatus("idle");
     };
-  }, [Config.baseUrl, Config.scannerKey, deviceId, label, enabled]);
+  }, [enabled, deviceId, label]);
 
   useEffect(() => {
-    if (!enabled || viewers === 0) return;
+    if (!enabled || !hasViewers) return;
     let stop = false;
+    let sent = 0;
+    let lastLog = Date.now();
+    let inFlight = false;
+
     (async () => {
       while (!stop) {
         const started = Date.now();
         let failed = false;
         try {
           const frame = await captureRef.current();
-          if (frame && socketRef.current?.connected)
-            socketRef.current.volatile.emit("frame", new Uint8Array(frame));
+          const socket = socketRef.current;
+          if (frame && socket?.connected && !inFlight) {
+            inFlight = true;
+            socket.timeout(1000).emit("frame", new Uint8Array(frame), () => {
+              inFlight = false;
+            });
+            sent++;
+          }
         } catch (e) {
           console.log("[stream] capture error", e);
           failed = true;
         }
+
+        if (Date.now() - lastLog >= 2000) {
+          console.log(`[stream] fps=${(sent / 2).toFixed(1)}`);
+          sent = 0;
+          lastLog = Date.now();
+        }
+
         const wait = (failed ? 500 : intervalMs) - (Date.now() - started);
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       }
     })();
+
     return () => {
       stop = true;
     };
-  }, [enabled, viewers, intervalMs]);
+  }, [enabled, hasViewers, intervalMs]);
 
   return { deviceId, viewers, status };
 }
