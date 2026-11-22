@@ -28,7 +28,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFrameOutput, CommonResolutions } from "react-native-vision-camera";
-import { createSynchronizable, scheduleOnRN } from "react-native-worklets";
+import { scheduleOnRN } from "react-native-worklets";
 import type { Image } from "react-native-nitro-image";
 import { NitroModules } from "react-native-nitro-modules";
 import type { FrameConverter } from "react-native-vision-camera";
