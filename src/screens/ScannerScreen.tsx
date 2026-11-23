@@ -113,6 +113,36 @@ export default function ScannerScreen({ navigation }: Props) {
   const mounted = useRef(true);
   const cameraRef = useRef<CameraRef>(null);
   const [cameraReady, setCameraReady] = useState(false);
+  const zoomTarget = useRef<number | undefined>(undefined);
+  const zoomBusy = useRef(false);
+
+  const flushZoom = useCallback(async () => {
+    if (zoomBusy.current) return;
+    zoomBusy.current = true;
+    try {
+      let applied: number | undefined;
+      while (applied !== zoomTarget.current) {
+        const controller = cameraRef.current?.controller;
+        if (!controller || zoomTarget.current == null) return;
+        applied = zoomTarget.current;
+        await controller.setZoom(applied);
+      }
+    } catch {
+    } finally {
+      zoomBusy.current = false;
+    }
+  }, []);
+
+  const onZoomChange = useCallback(
+    (v: number) => {
+      setZoom(v);
+      if (!device) return;
+      const max = Math.min(device.maxZoom, MAX_ZOOM);
+      zoomTarget.current = device.minZoom + v * (max - device.minZoom);
+      void flushZoom();
+    },
+    [device, flushZoom],
+  );
 
   const latestJpeg = useRef<ArrayBuffer | null>(null);
   const encoding = useRef(false);
@@ -284,16 +314,19 @@ export default function ScannerScreen({ navigation }: Props) {
             device={device}
             isActive={focused}
             torchMode={cameraReady ? (torch ? "on" : "off") : undefined}
-            zoom={
-              cameraReady
-                ? device.minZoom +
-                  zoom * (Math.min(device.maxZoom, MAX_ZOOM) - device.minZoom)
-                : undefined
-            }
+            getInitialZoom={() => zoomTarget.current}
             resizeMode="cover"
             onPreviewStarted={() => setCameraReady(true)}
             onPreviewStopped={() => setCameraReady(false)}
-            onError={(e) => setCameraError(e.message)}
+            onError={(e) => {
+              if (
+                /not active|new zoomRatio|zoom animation was canceled/i.test(
+                  e.message,
+                )
+              )
+                return;
+              setCameraError(e.message);
+            }}
           />
         ) : null}
       </View>
@@ -346,11 +379,11 @@ export default function ScannerScreen({ navigation }: Props) {
       <View style={[styles.zoomBar, { bottom: insets.bottom + 20 }]}>
         <MaterialIcons name="zoom-out" size={24} color="#FFFFFF" />
         <Slider
+          onValueChange={onZoomChange}
           style={{ flex: 1, height: 40 }}
           minimumValue={0}
           maximumValue={1}
           value={zoom}
-          onValueChange={setZoom}
           minimumTrackTintColor={AppTheme.primary}
           maximumTrackTintColor="rgba(255,255,255,0.35)"
           thumbTintColor={AppTheme.primary}
