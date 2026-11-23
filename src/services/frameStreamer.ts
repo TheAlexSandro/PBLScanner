@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
-import { Config } from "./config";
-import { appVersion } from "./net";
+import { Config } from "../config";
+import { appVersion } from "../net";
 
 type Options = {
   label?: string;
@@ -37,22 +37,11 @@ export function frameStreamer({
 
     const socket = io(`${Config.baseUrl}/stream`, {
       transports: ["websocket"],
-      auth: (cb) => {
-        fetch(`${Config.baseUrl}/stream/scannerToken`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-App-Version": appVersion(),
-            "X-Scanner-Key": Config.scannerKey,
-          },
-          body: JSON.stringify({ deviceId }),
-        })
-          .then((r) => {
-            if (!r.ok) throw new Error(String(r.status));
-            return r.json();
-          })
-          .then((r) => cb({ token: r["result"]["token"], label }))
-          .catch(() => cb({}));
+      auth: {
+        scannerKey: Config.scannerKey,
+        appVersion: appVersion(),
+        deviceId,
+        label,
       },
     });
     socketRef.current = socket;
@@ -103,13 +92,11 @@ export function frameStreamer({
             });
             sent++;
           }
-        } catch (e) {
-          console.log("[stream] capture error", e);
+        } catch {
           failed = true;
         }
 
         if (Date.now() - lastLog >= 2000) {
-          console.log(`[stream] fps=${(sent / 2).toFixed(1)}`);
           sent = 0;
           lastLog = Date.now();
         }

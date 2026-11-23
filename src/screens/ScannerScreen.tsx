@@ -43,7 +43,7 @@ import type { RootStackParamList } from "../navigation";
 import { isGateOpen, useGate } from "../services/gateState";
 import { scannerStatus } from "../services/scannerStatus";
 import { AppTheme } from "../theme";
-import { frameStreamer } from "../frameStreamer";
+import { frameStreamer } from "../services/frameStreamer";
 
 type Props = NativeStackScreenProps<RootStackParamList, "Scanner">;
 
@@ -173,8 +173,7 @@ export default function ScannerScreen({ navigation }: Props) {
       } finally {
         if (small !== image) small.dispose();
       }
-    } catch (e) {
-      console.log("[enc] error", e);
+    } catch {
     } finally {
       encoding.current = false;
       image.dispose();

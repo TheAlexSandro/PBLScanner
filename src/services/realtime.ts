@@ -48,7 +48,7 @@ class RealtimeService {
   private connect(): void {
     if (this.socket || !this.foreground || !Config.isValid) return;
 
-    const socket = io(`${Config.baseUrl}/wss`, {
+    const socket = io(`${Config.baseUrl}/stats`, {
       transports: ["websocket"],
       auth: { scannerKey: Config.scannerKey, appVersion: appVersion() },
       reconnection: true,
