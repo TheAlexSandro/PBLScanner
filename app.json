@@ -44,8 +44,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "45ecbacc-526c-49f2-a3bc-113a6d3c51eb"
+        "projectId": "180c2557-1509-437a-bfe4-87305e5ddc6f"
       }
-    }
+    },
+    "owner": "anehdehs-team"
   }
 }
