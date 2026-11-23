@@ -41,6 +41,7 @@ yarn-error.*
 /ios
 /android
 
+credentials.json
 keystores/
 /android
 /ios
